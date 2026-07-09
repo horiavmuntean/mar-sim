@@ -65,7 +65,10 @@
             <button id="btnExample">Încarcă exemplu</button>
             <button id="btnClear">Reset</button>
             <button id="btnCalc">Calculează</button>
+            <button id="btnSaveParams">Salvează parametri</button>
+            <button id="btnLoadParams">Încarcă parametri</button>
         </div>
+        <input id="loadParamsFile" type="file" accept="application/json,.json" style="display:none;" />
     </div>
 
     <div class="card">
@@ -91,6 +94,11 @@
         <div class="row">
             <label>Preț de decontare (DSP/ISP)</label>
             <input id="settlePrice" type="number" step="0.01" value="16000" />
+        </div>
+
+        <div class="row">
+            <label>Marja unitară (RON / contract)</label>
+            <input id="unitMargin" type="text" value="1920" readonly />
         </div>
 
         <div class="row">
@@ -137,7 +145,7 @@
             <tr><th>Non-Spot (contracte implicate)</th><td id="outNonSpotContracts">—</td></tr>
             <tr><th>Marja Spread Spot (RON)</th><td id="outMSSpot">—</td></tr>
             <tr><th>Marja Spread Non-Spot (RON)</th><td id="outMSNonSpot">—</td></tr>
-            <tr><th>Total Marja Spread (RON)</th><td id="outMSTotal">—</td></tr>
+            <tr><th>Total Marja Spread</th><td id="outMSTotal">—</td></tr>
             <tr><th>Marja Suplimentară brută (RON)</th><td id="outAddRaw">—</td></tr>
             <tr><th>Marja Minimă (RON)</th><td id="outMinMargin">—</td></tr>
             <tr><th>Marja Suplimentară aplicată (RON)</th><td id="outAddApplied">—</td></tr>
@@ -157,6 +165,87 @@
     function fmt(n) {
         if (n === null || n === undefined || Number.isNaN(n)) return "—";
         return n.toLocaleString("ro-RO", { maximumFractionDigits: 2 });
+    }
+
+    function updateUnitMargin() {
+        const intervalMargin = Number(document.getElementById("intervalMargin").value);
+        const multiplier = Number(document.getElementById("multiplier").value);
+        const settlePrice = Number(document.getElementById("settlePrice").value);
+        const unitMargin = intervalMargin * multiplier * settlePrice;
+        document.getElementById("unitMargin").value = fmt(unitMargin);
+        return unitMargin;
+    }
+
+    function getState() {
+        const n = Number(document.getElementById("numSeries").value);
+        const series = [];
+        for (let i = 0; i < n; i++) {
+            series.push({
+                label: (document.getElementById(`lbl_${i}`).value || `Seria ${i+1}`).trim(),
+                position: Number(document.getElementById(`pos_${i}`).value || 0)
+            });
+        }
+
+        return {
+            numSeries: n,
+            spotIndex: document.getElementById("spotIndex").value,
+            series,
+            params: {
+                rateSpot: Number(document.getElementById("rateSpot").value),
+                rateNonSpot: Number(document.getElementById("rateNonSpot").value),
+                intervalMargin: Number(document.getElementById("intervalMargin").value),
+                multiplier: Number(document.getElementById("multiplier").value),
+                settlePrice: Number(document.getElementById("settlePrice").value),
+                useMinMargin: document.getElementById("useMinMargin").value,
+                minInterval: Number(document.getElementById("minInterval").value)
+            }
+        };
+    }
+
+    function applyState(state) {
+        if (!state || typeof state !== "object") {
+            throw new Error("Format JSON invalid");
+        }
+
+        const n = Number(state.numSeries || 4);
+        document.getElementById("numSeries").value = String(n);
+        buildTable(n);
+
+        if (state.spotIndex !== undefined) {
+            document.getElementById("spotIndex").value = String(state.spotIndex);
+        }
+
+        const series = Array.isArray(state.series) ? state.series : [];
+        for (let i = 0; i < n; i++) {
+            const item = series[i] || {};
+            document.getElementById(`lbl_${i}`).value = item.label || "";
+            document.getElementById(`pos_${i}`).value = item.position ?? 0;
+        }
+
+        const params = state.params || {};
+        document.getElementById("rateSpot").value = params.rateSpot ?? 300;
+        document.getElementById("rateNonSpot").value = params.rateNonSpot ?? 200;
+        document.getElementById("intervalMargin").value = params.intervalMargin ?? 0.12;
+        document.getElementById("multiplier").value = params.multiplier ?? 10;
+        document.getElementById("settlePrice").value = params.settlePrice ?? 16000;
+        document.getElementById("useMinMargin").value = params.useMinMargin || "no";
+        document.getElementById("minInterval").value = params.minInterval ?? 0.04;
+
+        updateUnitMargin();
+        calc();
+    }
+
+    function saveParams() {
+        const state = getState();
+        const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "marja-params.json";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
     }
 
     function buildTable(n) {
@@ -205,6 +294,7 @@
         const intervalMargin = Number(document.getElementById("intervalMargin").value);
         const multiplier = Number(document.getElementById("multiplier").value);
         const settlePrice = Number(document.getElementById("settlePrice").value);
+        const unitMargin = updateUnitMargin();
 
         const useMin = document.getElementById("useMinMargin").value === "yes";
         const minInterval = Number(document.getElementById("minInterval").value);
@@ -246,10 +336,10 @@
         const nonSpreadAbs = Math.abs(nonSpreadSigned);
 
         // Marja Suplimentară brută
-        const addRaw = nonSpreadAbs * intervalMargin * multiplier * settlePrice;
+        const addRaw = nonSpreadAbs * unitMargin;
 
         // Marja Minimă (optional)
-        const minMargin = nonSpreadAbs * multiplier * settlePrice * minInterval;
+        const minMargin = nonSpreadAbs * unitMargin * (minInterval / (intervalMargin || 1));
 
         const addApplied = useMin ? Math.max(addRaw, minMargin) : addRaw;
 
@@ -266,7 +356,7 @@
         document.getElementById("outNonSpotContracts").textContent = fmt(nonSpotContracts) + " (contracte)";
         document.getElementById("outMSSpot").textContent = fmt(msSpot);
         document.getElementById("outMSNonSpot").textContent = fmt(msNonSpot);
-        document.getElementById("outMSTotal").textContent = fmt(msTotal);
+        document.getElementById("outMSTotal").textContent = `${fmt(msTotal)} RON`;
         document.getElementById("outAddRaw").textContent = fmt(addRaw);
         document.getElementById("outMinMargin").textContent = useMin ? fmt(minMargin) : "— (dezactivată)";
         document.getElementById("outAddApplied").textContent = fmt(addApplied);
@@ -284,6 +374,27 @@
 
     // Buttons
     document.getElementById("btnCalc").addEventListener("click", calc);
+    document.getElementById("btnSaveParams").addEventListener("click", saveParams);
+    document.getElementById("btnLoadParams").addEventListener("click", () => {
+        document.getElementById("loadParamsFile").click();
+    });
+
+    document.getElementById("loadParamsFile").addEventListener("change", (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = () => {
+            try {
+                const parsed = JSON.parse(reader.result);
+                applyState(parsed);
+            } catch (error) {
+                document.getElementById("alerts").innerHTML = `<div class="warn">Fișierul JSON este invalid sau nu poate fi citit.</div>`;
+            }
+        };
+        reader.readAsText(file);
+        e.target.value = "";
+    });
 
     document.getElementById("btnClear").addEventListener("click", () => {
         const n = Number(document.getElementById("numSeries").value);
@@ -315,8 +426,14 @@
         buildTable(Number(e.target.value));
     });
 
+    ["intervalMargin", "multiplier", "settlePrice"].forEach((id) => {
+        document.getElementById(id).addEventListener("input", updateUnitMargin);
+        document.getElementById(id).addEventListener("change", updateUnitMargin);
+    });
+
     // init
     buildTable(Number(document.getElementById("numSeries").value));
+    updateUnitMargin();
 </script>
 </body>
 </html>
